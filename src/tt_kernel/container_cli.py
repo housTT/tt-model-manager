@@ -1025,10 +1025,22 @@ def stop_container(manifest: Manifest, *, profile_name: Optional[str] = None) ->
             clean = container.stop(name, image=container.image_ref(manifest))
             st.detail("clean shutdown" if clean else "killed — mesh reset")
         if not clean:
+            # NOT "the next boot is safe": a SIGKILL teardown can leave the device wedged in a
+            # way `tt-smi -r` does not clear (observed on Blackhole/KMD 2.10.0 — every reload
+            # then hangs at the first large host→device DMA, `could only pin N of M pages` in
+            # dmesg), and only a host reboot recovers it. Say what was attempted, and name the
+            # symptom + the real remedy rather than promising a repair that may not have
+            # happened. See issue #107.
             console.note(
-                "the server did not exit on SIGTERM, so the mesh was left dirty and has "
-                "been reset with tt-smi; the next boot is safe",
+                "the server was SIGKILLed before it could close the mesh; tt-smi -r was run to "
+                "reset it, but a forced kill can leave the device wedged in a way the reset does "
+                "not clear",
                 marker="⚠", style="warning",
+            )
+            console.note(
+                "if the next boot hangs at device open (dmesg: 'could only pin N of M pages'), "
+                "reboot the host to recover",
+                marker="→",
             )
     if not stopped:
         console.note("nothing running", marker="○")

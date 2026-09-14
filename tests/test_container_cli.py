@@ -420,10 +420,16 @@ def test_stop_reports_a_clean_shutdown(tmp_path, monkeypatch, capsys):
 
 
 def test_stop_warns_loudly_when_a_kill_forced_a_mesh_reset(tmp_path, monkeypatch, capsys):
+    """#107: a SIGKILL teardown must NOT be reported as recovered — `tt-smi -r` can fail to
+    clear a wedged device (only a host reboot does). Say what was attempted and how to
+    recover, never 'the next boot is safe'."""
     monkeypatch.setattr(container, "running", lambda name=None: [{"name": name}])
     monkeypatch.setattr(container, "stop", lambda name, image=None: False)
     container_cli.stop_container(_manifest(tmp_path))
-    assert "mesh was left dirty" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "the next boot is safe" not in out          # the false reassurance is gone
+    assert "SIGKILL" in out and "tt-smi -r" in out      # says what was attempted
+    assert "reboot the host" in out and "could only pin" in out  # the real remedy + symptom
 
 
 def test_stopping_nothing_says_so_rather_than_failing(tmp_path, monkeypatch, capsys):

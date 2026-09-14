@@ -1661,8 +1661,10 @@ def stop(
     """Stop a running container package, SIGTERM first.
 
     A clean SIGTERM lets the server close the mesh on its way out. If the grace period
-    expires and docker has to SIGKILL, the devices are left needing a reset — so the mesh
-    is reset with tt-smi from a throwaway container, and you are told it happened.
+    expires and docker has to SIGKILL, the devices are left needing a reset — tt-smi -r is
+    run from a throwaway container to attempt it, but a forced kill can wedge the device in a
+    way the reset does not clear, so you are told what was attempted and how to recover (a
+    host reboot) rather than promised it is fixed.
     """
     from . import container_cli
 
