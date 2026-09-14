@@ -34,6 +34,32 @@ repo (the "running folder"): `wheels/`, `metal/`, `install.sh`, `run.sh`, a per-
 `tt_kernel_manifest.json`. If you omit `--max-num-seqs`/`--block-size`, the launcher defaults to
 32/64 (the known-good tt_transformers values).
 
+For models with tool calling or reasoning, pass `--tool-parser <name>` and/or
+`--reasoning-parser <name>` when packaging. These persist the parser names in the
+manifest and generate the corresponding server flags; a tool parser also enables
+automatic tool choice. The packaged runtime must provide the named parsers.
+
+Preserve other validated vLLM arguments with repeatable `--server-arg`, one argv
+element per occurrence. For example, `--server-arg=--async-scheduling` enables
+async scheduling, while `--server-arg=--tensor-parallel-size --server-arg=2`
+records a flag and its value. Pass JSON as one quoted value, such as
+`--server-arg=--additional-config --server-arg='{"tt":{"sample_on_device_mode":"all"}}'`.
+The generated launcher preserves argument boundaries and literal shell characters.
+
+A v5 bundle declares **one** hardware configuration. To distribute P150, P150x2
+and P150x4 configurations through this format, package each target separately;
+the same custom wheels can be used as inputs. Set `--device-count` as well as
+`--mesh`, explicitly author `--env TT_METAL_VISIBLE_DEVICES=...`, and carry the
+validated plugin fabric/parent-mesh configuration through `--server-arg` with
+`--additional-config`. The v5 renderer does not translate `mesh.fabric` into a
+plugin setting, and its default visibility is device `0`. Device IDs and physical
+parent meshes must come from the target machine, not just the logical model size.
+
+`tt-model serve <id> --profile <name>` is only supported for container packages
+(schema 5.1); v5/v6 serving rejects it rather than silently launching the default
+mesh. Each separate v5 target still requires its own hardware acceptance. A
+passing launcher test is not evidence of multi-chip model correctness.
+
 The embedded `metal/` tree is your source, not your build: it **excludes** VCS (`.git`),
 byte-caches (`__pycache__`, `*.pyc`), virtualenvs (`venv`, `.venv`), logs, and — at the tree root
 — the regenerable multi-GB caches and build output (`.cpmcache`, `python_env`, `tt_cache`,

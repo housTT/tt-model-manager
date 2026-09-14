@@ -16,6 +16,9 @@
 """
 
 import json
+from pathlib import Path
+import shlex
+import subprocess
 import time
 
 import pytest
@@ -111,6 +114,69 @@ def test_known_serve_fields_still_accepted():
 
 
 # ---- 3. manifest values are shlex-quoted in the generated build shell -------------------
+
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("failure", ["none", "install", "check"])
+def test_docker_tooling_install_respects_runtime_lock(tmp_path, locked, failure):
+    """Run the actual Docker RUN shell with fake commands, not Docker or pip."""
+    dockerfile = (Path(__file__).parents[1] / "src/tt_kernel/docker/Dockerfile").read_text()
+    block = dockerfile.split("RUN bash /ctx/install_engine.sh", 1)[1].split("\n\n", 1)[0]
+    script = "bash /ctx/install_engine.sh" + block.replace("\\\n", " ")
+    lock = tmp_path / "runtime lock.txt"
+    if locked:
+        lock.write_text("example==1.0\n")
+    script = script.replace("/ctx/requirements.lock", shlex.quote(str(lock)))
+    result = subprocess.run(
+        ["bash", "-c", 'set -eu\nVENV="/test venv"\n'
+         'bash() { :; }\n'
+         f'FAILURE={failure}\n'
+         'uv() { printf "%s\\0" "$@"; printf "\\n"; '
+         'if [ "$2" = "$FAILURE" ]; then return 23; fi; }\n' + script],
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == (0 if failure == "none" else 23), result.stderr
+    calls = [line.rstrip("\0").split("\0") for line in result.stdout.splitlines()]
+    install = next(argv for argv in calls if argv[:2] == ["pip", "install"])
+    assert "tt-smi" in install
+    if locked:
+        assert "--constraint" in install, "late tooling must not change locked runtime pins"
+        assert install[install.index("--constraint") + 1] == str(lock)
+    else:
+        assert "--constraint" not in install
+    if failure == "install":
+        assert len(calls) == 1, "failed constrained installs must not retry unconstrained"
+    else:
+        assert calls[-1] == ["pip", "check", "--python", "/test venv/bin/python"]
+
+
+@pytest.mark.parametrize("vllm_source", [
+    {"wheel": "/author/custom-vllm.whl"},
+    {"path": "/author/vllm"},
+    {"version": "0.24.0"},
+])
+def test_locked_engine_install_preserves_runtime_pins(vllm_source):
+    """Execute rendered shell against a recording uv function, never pip or Docker."""
+    m = _mani(runtime={
+        "vllm": vllm_source, "plugin": {"path": "/author/plugin"},
+        "lock": "requirements.lock", "extension": "models/common/ext",
+        "wheels": ["/author/helper.whl"],
+    })
+    script = '\n'.join(launcher_for(m.kind).install_lines(m))
+    result = subprocess.run(
+        ["bash", "-c", 'set -eu\nVENV="/test venv"\n'
+         'uv() { printf "%s\\0" "$@"; printf "\\n"; }\n' + script],
+        text=True, capture_output=True, check=True,
+    )
+    calls = [line.rstrip("\0").split("\0") for line in result.stdout.splitlines()]
+    installs = [argv for argv in calls if argv[:2] == ["pip", "install"]]
+    assert "-r" in installs[0], "the lock must install before every engine source form"
+    assert installs[0][installs[0].index("-r") + 1] == "/ctx/requirements.lock"
+    assert all("--no-deps" in argv for argv in installs[1:]), (
+        "engine, plugin, extension and extra wheels must not re-resolve locked dependencies"
+    )
+    assert len(installs) == 5
+    assert calls[-1] == ["pip", "check", "--python", "/test venv/bin/python"]
+
 
 def test_vllm_version_is_shlex_quoted_in_install_lines():
     evil = "0.24.0; touch /tmp/pwned"

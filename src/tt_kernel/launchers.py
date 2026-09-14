@@ -200,6 +200,16 @@ class VllmPluginLauncher:
         vllm = rt["vllm"]
         plugin = rt.get("plugin") or {}
         lines: List[str] = []
+        locked = bool(rt.get("lock"))
+        no_deps = " --no-deps" if locked else ""
+        if locked:
+            # The dependency lock applies to local wheels/trees as well as releases.
+            # Install it before the engine, then keep all runtime installs from
+            # re-resolving it. A final pip check rejects an incomplete lock.
+            lines.append(
+                'uv pip install --python "$VENV/bin/python" -r /ctx/requirements.lock '
+                f"--extra-index-url {self.PYTORCH_CPU_INDEX} --index-strategy unsafe-best-match"
+            )
 
         # A wheel or a local tree the author staged: install it directly. A wheel is what
         # v5 shipped (`--vllm-wheel`) and is both the fastest route and the most faithful
@@ -207,14 +217,14 @@ class VllmPluginLauncher:
         # differently. Neither needs the sdist build or the override file below.
         if vllm.get("wheel"):
             return (
-                [f'uv pip install --python "$VENV/bin/python" {VLLM_CTX_WHEEL} '
+                lines + [f'uv pip install --python "$VENV/bin/python"{no_deps} {VLLM_CTX_WHEEL} '
                  f"--extra-index-url {self.PYTORCH_CPU_INDEX} "
                  f"--index-strategy unsafe-best-match"]
                 + self._post_engine_lines(m, plugin)
             )
         if vllm.get("path"):
             return (
-                [f'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python" '
+                lines + [f'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python"{no_deps} '
                  f"{VLLM_CTX_DIR} --extra-index-url {self.PYTORCH_CPU_INDEX} "
                  f"--index-strategy unsafe-best-match"]
                 + self._post_engine_lines(m, plugin)
@@ -227,8 +237,6 @@ class VllmPluginLauncher:
             # The lock IS the dependency set: vLLM's own requirements are already in it,
             # so vLLM installs --no-deps and nothing resolves at build time.
             lines += [
-                'uv pip install --python "$VENV/bin/python" -r /ctx/requirements.lock '
-                f"--extra-index-url {self.PYTORCH_CPU_INDEX} --index-strategy unsafe-best-match",
                 'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python" '
                 f"--no-deps --no-binary vllm vllm=={version}",
             ]
@@ -249,13 +257,14 @@ class VllmPluginLauncher:
         """Everything after vLLM itself is installed, whichever route it came by."""
         rt = m.runtime
         lines: List[str] = []
+        no_deps = " --no-deps" if rt.get("lock") else ""
         # transformers imports torchaudio if it is merely INSTALLED, and the wheel that
         # rides along with CPU torch is unloadable — the validated recipe removes it.
         lines.append('uv pip uninstall --python "$VENV/bin/python" torchaudio || true')
 
         if plugin.get("version"):
             lines.append(
-                f'uv pip install --python "$VENV/bin/python" '
+                f'uv pip install --python "$VENV/bin/python"{no_deps} '
                 f"vllm-tt-plugin=={shlex.quote(plugin['version'])}"
             )
         elif plugin.get("path"):
@@ -264,27 +273,29 @@ class VllmPluginLauncher:
             # are not committed (or not pushed) still ship. Non-editable, so nothing
             # from /ctx has to survive into the runtime image.
             lines.append(
-                f'uv pip install --python "$VENV/bin/python" {PLUGIN_CTX_DIR}'
+                f'uv pip install --python "$VENV/bin/python"{no_deps} {PLUGIN_CTX_DIR}'
             )
         else:
             ref = plugin.get("sha") or plugin["ref"]
             lines.append(
                 f"git clone {shlex.quote(plugin['repo'])} /tmp/vllm-tt-plugin"
                 f" && git -C /tmp/vllm-tt-plugin checkout {shlex.quote(ref)}"
-                f' && uv pip install --python "$VENV/bin/python" /tmp/vllm-tt-plugin'
+                f' && uv pip install --python "$VENV/bin/python"{no_deps} /tmp/vllm-tt-plugin'
                 f" && rm -rf /tmp/vllm-tt-plugin"
             )
         if rt.get("extension"):
             lines.append(
-                f'uv pip install --python "$VENV/bin/python" /opt/tt-metal/{shlex.quote(rt["extension"])}'
+                f'uv pip install --python "$VENV/bin/python"{no_deps} /opt/tt-metal/{shlex.quote(rt["extension"])}'
             )
         if rt.get("wheels"):
             # Extra local wheels the author needs alongside the engine — v5's
             # `--extra-wheel`. Staged into the context by `package`; installed last so
             # they can override anything resolved above.
             lines.append(
-                f'uv pip install --python "$VENV/bin/python" {WHEELS_CTX_DIR}/*.whl'
+                f'uv pip install --python "$VENV/bin/python"{no_deps} {WHEELS_CTX_DIR}/*.whl'
             )
+        if rt.get("lock"):
+            lines.append('uv pip check --python "$VENV/bin/python"')
         return lines
 
     def verify_lines(self, m: "ContainerManifest") -> List[str]:

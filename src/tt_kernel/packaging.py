@@ -22,6 +22,7 @@ import datetime
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import socket
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import Dict, List, Optional
 
 from .manifest import (
     BundledPlatform,
+    Capabilities,
     Deps,
     Entrypoint,
     Manifest,
@@ -391,7 +393,7 @@ def render_run_sh(manifest: Manifest) -> str:
     weights = manifest.weights.repo_id if manifest.weights else ""
     mesh_device = (manifest.mesh.topology if manifest.mesh and manifest.mesh.topology else "") or ""
     extra_env = "".join(
-        f'export {k}="{v}"\n' for k, v in (manifest.env or {}).items()
+        f'export {k}={shlex.quote(str(v))}\n' for k, v in (manifest.env or {}).items()
     )
     # The tt_transformers adapter reads HF_MODEL from the env (not vLLM's --model), so export it.
     hf_export = f'export HF_MODEL="${{HF_MODEL:-{weights}}}"\n' if weights else ""
@@ -412,11 +414,11 @@ def render_run_sh(manifest: Manifest) -> str:
     cap = manifest.capabilities
     if cap is not None:
         if cap.tool_parser:
-            serving += f" --enable-auto-tool-choice --tool-call-parser {cap.tool_parser}"
+            serving += f" --enable-auto-tool-choice --tool-call-parser {shlex.quote(cap.tool_parser)}"
         if cap.reasoning_parser:
-            serving += f" --reasoning_parser {cap.reasoning_parser}"
+            serving += f" --reasoning_parser {shlex.quote(cap.reasoning_parser)}"
     if res and res.extra_args:
-        serving += " " + " ".join(str(a) for a in res.extra_args)
+        serving += " " + shlex.join(str(a) for a in res.extra_args)
     # PYTHONPATH: a v5 fat bundle embeds the modified metal tree at metal/; a v6 thin bundle gets
     # tt_transformers/TTTv2 from the installed wheels and only needs its own model.py on the path
     # (bundle root, or deps.model_dir). This is the one serve-time difference between the regimes.
@@ -435,12 +437,18 @@ PYBIN="$VENV/bin/python"
 # Locate ttnn WITHOUT importing it — importing loads _ttnn.so, which is exactly what needs the
 # LD_PRELOAD below (chicken-and-egg). find_spec resolves the path without executing the module.
 TTNN_DIR="$("$PYBIN" -c 'import importlib.util,os;print(os.path.dirname(importlib.util.find_spec("ttnn").origin))')"
-# _ttnncpp.so lives in ttnn.libs/ for an auditwheel-repaired (portable) wheel, or build/lib/ for a
-# raw one; preload it to avoid the glibc "static TLS block" error on late dlopen.
+# _ttnncpp.so may live in *.libs/ or remain in build/lib/ after auditwheel repair.
+# Preload it to avoid the glibc "static TLS block" error on late dlopen.
 # Prefer the auditwheel-vendored copy in *.libs/ (that's the one _ttnn.so actually loads via
-# RPATH); fall back to build/lib for a raw (unrepaired) wheel.
-LD_PRELOAD="$(ls "$TTNN_DIR"/../*.libs/_ttnncpp*.so 2>/dev/null | head -1)"
-[ -n "$LD_PRELOAD" ] || LD_PRELOAD="$(ls "$TTNN_DIR"/build/lib/_ttnncpp*.so 2>/dev/null | head -1)"
+# RPATH); fall back to build/lib. An unmatched glob is normal, not a shell error.
+LD_PRELOAD=""
+for preload_candidate in "$TTNN_DIR"/../*.libs/_ttnncpp*.so "$TTNN_DIR"/build/lib/_ttnncpp*.so; do
+  if [ -f "$preload_candidate" ]; then
+    LD_PRELOAD="$preload_candidate"
+    break
+  fi
+done
+unset preload_candidate
 export LD_PRELOAD="${{LD_PRELOAD:?could not locate _ttnncpp.so in the ttnn install}}"
 export TT_METAL_HOME="$TTNN_DIR"
 # EXTRA_MODELS_DIR is a PARENT of per-model bundle folders; the plugin scans its children for
@@ -490,6 +498,7 @@ def stage_package(
     mesh: Optional[Mesh] = None,
     env: Optional[Dict[str, str]] = None,
     resources: Optional[Resources] = None,
+    capabilities: Optional[Capabilities] = None,
     tt_metal_version: str = "unknown",
     firmware_min: Optional[str] = None,
     python_version: Optional[str] = None,
@@ -604,6 +613,7 @@ def stage_package(
         mesh=mesh,
         env=env or {},
         resources=resources,
+        capabilities=capabilities,
         bundled=bundled,
     )
 

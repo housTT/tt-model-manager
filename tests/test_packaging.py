@@ -8,11 +8,13 @@ manifest are asserted.
 
 import json
 import os
+import subprocess
 
+import pytest
 from typer.testing import CliRunner
 
 from tt_kernel import cli, packaging
-from tt_kernel.manifest import Capabilities, Manifest, Mesh, Producer, WeightsRef
+from tt_kernel.manifest import Capabilities, Manifest, Mesh, Producer, Resources, WeightsRef
 
 _runner = CliRunner()
 
@@ -66,6 +68,78 @@ def test_render_run_sh_no_tool_flags_without_capability():
     """No tool_parser declared => neither flag appears (bare --enable-auto-tool-choice is an error)."""
     run = packaging.render_run_sh(_run_sh_manifest())
     assert "--enable-auto-tool-choice" not in run and "--tool-call-parser" not in run
+
+
+def test_render_run_sh_preserves_extra_argument_boundaries():
+    """JSON TT config and literal shell characters reach vLLM as authored argv."""
+    extra_args = [
+        "--async-scheduling", "--additional-config",
+        '{"tt": {"trace_region_size": 220000000, "fabric_config": "FABRIC_2D"}}',
+        "--served-model-name", "literal $(printf expanded) 'name'",
+    ]
+    run = packaging.render_run_sh(_run_sh_manifest(resources=Resources(extra_args=extra_args)))
+    command = next(line for line in run.splitlines() if line.startswith("CMD=("))
+    result = subprocess.run(
+        ["bash", "-c", 'PYBIN=python\n' + command + '\nprintf "%s\\0" "${CMD[@]}"'],
+        check=True, capture_output=True,
+    )
+    argv = result.stdout.decode().split("\0")[:-1]
+    assert argv[-len(extra_args):] == extra_args
+
+
+def test_render_run_sh_preserves_json_environment():
+    value = '{"throw_exception_on_fallback":true}'
+    run = packaging.render_run_sh(_run_sh_manifest(env={"TTNN_CONFIG_OVERRIDES": value}))
+    export = next(line for line in run.splitlines() if line.startswith("export TTNN_CONFIG_OVERRIDES="))
+    result = subprocess.run(
+        ["bash", "-c", export + '\nprintf "%s" "$TTNN_CONFIG_OVERRIDES"'],
+        check=True, capture_output=True, text=True,
+    )
+    assert result.stdout == value
+
+
+@pytest.mark.parametrize("vendored,fallback", [(True, True), (True, False), (False, True), (False, False)])
+def test_render_run_sh_preload_lookup_under_errexit(tmp_path, vendored, fallback):
+    """Missing first glob must reach fallback; no TT import or fake library load."""
+    ttnn_dir = tmp_path / "bundle with spaces $literal" / "ttnn"
+    ttnn_dir.mkdir(parents=True)
+    primary = ttnn_dir.parent / "ttnn.libs" / "_ttnncpp-vendored.so"
+    secondary = ttnn_dir / "build" / "lib" / "_ttnncpp.so"
+    for exists, path in ((vendored, primary), (fallback, secondary)):
+        if exists:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"test fixture: never loaded")
+    run = packaging.render_run_sh(_run_sh_manifest())
+    selection = run[run.index("# _ttnncpp.so"):run.index('export TT_METAL_HOME=')]
+    result = subprocess.run(
+        ["bash", "-c", 'set -euo pipefail\n' + selection + '\nprintf "%s" "$LD_PRELOAD"'],
+        env={**os.environ, "TTNN_DIR": str(ttnn_dir), "LD_PRELOAD": ""},
+        text=True, capture_output=True,
+    )
+    if vendored or fallback:
+        assert result.returncode == 0, result.stderr
+        assert os.path.realpath(result.stdout) == str(primary if vendored else secondary)
+    else:
+        assert result.returncode != 0
+        assert "could not locate _ttnncpp.so" in result.stderr
+
+
+def test_render_run_sh_preload_ignores_directory_match(tmp_path):
+    ttnn_dir = tmp_path / "ttnn"
+    (tmp_path / "ttnn.libs" / "_ttnncpp-not-a-library.so").mkdir(parents=True)
+    (tmp_path / "ttnn.libs" / "_ttnncpp-not-a-library.so" / "payload.txt").write_text("not a library")
+    library = ttnn_dir / "build" / "lib" / "_ttnncpp.so"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"test fixture: never loaded")
+    run = packaging.render_run_sh(_run_sh_manifest())
+    selection = run[run.index("# _ttnncpp.so"):run.index('export TT_METAL_HOME=')]
+    result = subprocess.run(
+        ["bash", "-c", 'set -euo pipefail\n' + selection + '\nprintf "%s" "$LD_PRELOAD"'],
+        env={**os.environ, "TTNN_DIR": str(ttnn_dir), "LD_PRELOAD": ""},
+        text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert os.path.realpath(result.stdout) == str(library)
 
 
 def test_stage_package_layout(tmp_path):
@@ -290,7 +364,14 @@ def test_stage_package_normalize_failure_surfaces_as_staging_error(tmp_path, mon
     assert "metal tree" in str(ei.value)  # wrapped with staging context, not a bare OSError
 
 
-def test_cli_package_stage_only(tmp_path):
+@pytest.mark.parametrize("tool_parser,reasoning_parser", [
+    (None, None), ("gemma4", None), (None, "gemma4"), ("gemma4", "gemma4"),
+])
+@pytest.mark.parametrize("extra_args", [[], [
+    "--async-scheduling", "--tensor-parallel-size", "2", "--additional-config",
+    '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 220000000}}',
+]])
+def test_cli_package_stage_only(tmp_path, tool_parser, reasoning_parser, extra_args):
     """`tt-model package ... --out <dir>` (no repo_id) stages the folder, no network."""
     wheels = tmp_path / "w"
     wheels.mkdir()
@@ -300,6 +381,12 @@ def test_cli_package_stage_only(tmp_path):
     metal.mkdir()
     (metal / "requirements.txt").write_text("torch==2.11.0\n")
     out = tmp_path / "staged"
+    parser_args = []
+    if tool_parser:
+        parser_args += ["--tool-parser", tool_parser]
+    if reasoning_parser:
+        parser_args += ["--reasoning-parser", reasoning_parser]
+    parser_args += [f"--server-arg={arg}" for arg in extra_args]
 
     res = _runner.invoke(
         cli.app,
@@ -314,7 +401,7 @@ def test_cli_package_stage_only(tmp_path):
             "--mesh", "P150",
             "--no-repair", "--no-vendor-deps",
             "--out", str(out),
-        ],
+        ] + parser_args,
     )
     assert res.exit_code == 0, res.output
     m = Manifest.from_json((out / "tt_kernel_manifest.json").read_text())
@@ -322,6 +409,19 @@ def test_cli_package_stage_only(tmp_path):
     # wheels_dir auto-classified ttnn + plugin
     assert m.bundled.ttnn_wheel is not None and m.bundled.plugin_wheel is not None
     assert (out / "wheels" / "ttnn-0.75.0-cp312-cp312-linux_x86_64.whl").is_file()
+    launch = (out / "run.sh").read_text()
+    if tool_parser or reasoning_parser:
+        assert m.capabilities.tool_parser == tool_parser
+        assert m.capabilities.reasoning_parser == reasoning_parser
+    else:
+        assert m.capabilities is None
+    assert ("--enable-auto-tool-choice" in launch) == bool(tool_parser)
+    assert ("--tool-call-parser gemma4" in launch) == bool(tool_parser)
+    assert ("--reasoning_parser gemma4" in launch) == bool(reasoning_parser)
+    if extra_args:
+        assert m.resources.extra_args == extra_args
+    else:
+        assert m.resources is None
 
 
 def test_cli_package_requires_ttnn_wheel(tmp_path):

@@ -8,6 +8,7 @@ HF download and the install.sh subprocess are stubbed.
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from tt_kernel import cli, localdb, metal, packaging, runtime
@@ -285,6 +286,59 @@ def _stub_serve_run(monkeypatch):
             returncode = 0
         return _R()
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+
+@pytest.mark.parametrize("installed", [False, True])
+@pytest.mark.parametrize("print_only", [False, True])
+def test_serve_rejects_profile_for_venv_bundle(monkeypatch, tmp_path, installed, print_only):
+    """A container-only profile must not silently launch a v5/v6 default mesh."""
+    from tt_kernel import container_cli
+
+    _isolate(monkeypatch, tmp_path)
+    if installed:
+        _record_installed(tmp_path, revision="installed")
+    monkeypatch.setattr(container_cli, "resolve_target", lambda *a, **k: None)
+    monkeypatch.setattr(cli.hub, "fetch_manifest", lambda *a, **k: None)
+    actions = []
+    monkeypatch.setattr(cli, "_serve_self_contained", lambda *a, **k: actions.append("serve"))
+
+    def unexpected_download(*args, **kwargs):
+        actions.append("download")
+        raise AssertionError("unsupported profile must fail before installation")
+
+    monkeypatch.setattr(cli.hub, "download_bundle", unexpected_download)
+    argv = ["serve", "myorg/llama-3.2-3b-tt", "--profile", "p150x4"]
+    if installed:
+        argv.append("--local-only")
+    if print_only:
+        argv.append("--print")
+    result = _runner.invoke(cli.app, argv)
+    assert result.exit_code != 0
+    assert "--profile requires a container package" in result.output
+    assert actions == []
+
+
+@pytest.mark.parametrize("print_only", [False, True])
+def test_serve_still_forwards_profile_to_resolved_container(monkeypatch, tmp_path, print_only):
+    """The venv rejection must not intercept the supported container route."""
+    from tt_kernel import container_cli
+
+    _isolate(monkeypatch, tmp_path)
+    resolved = object()
+    monkeypatch.setattr(container_cli, "resolve_target", lambda *a, **k: resolved)
+    calls = []
+    monkeypatch.setattr(
+        container_cli, "serve_container", lambda manifest, **kwargs: calls.append((manifest, kwargs))
+    )
+    argv = ["serve", "myorg/container", "--profile", "p150x4", "--local-only"]
+    if print_only:
+        argv.append("--print")
+    result = _runner.invoke(cli.app, argv)
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0][0] is resolved
+    assert calls[0][1]["profile_name"] == "p150x4"
+    assert calls[0][1]["print_only"] == print_only
 
 
 def test_serve_warns_when_newer_revision_available(monkeypatch, tmp_path):

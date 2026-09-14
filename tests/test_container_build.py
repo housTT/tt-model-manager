@@ -208,6 +208,24 @@ def test_the_build_context_excludes_the_expensive_trees(tmp_path, monkeypatch):
     assert (ctx_metal / "tt_metal").is_dir()   # the tree itself survives
 
 
+@pytest.mark.parametrize("name", ["bringup", ".agents", ".codex"])
+def test_metal_context_excludes_root_agent_state_only(tmp_path, name):
+    """Agent transcripts are not compiler inputs; similarly named source stays."""
+    metal = tmp_path / "metal"
+    root_artifact = metal / name / "artifacts" / "events.jsonl"
+    nested_source = metal / "tt_metal" / "test_utils" / name / "fixture.cpp"
+    for path in (root_artifact, nested_source):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("test fixture\n")
+    (metal / "build_metal.sh").write_text("build input\n")
+    dest = tmp_path / "context"
+    build._copy_metal_tree(metal, dest)
+    assert not (dest / name).exists()
+    assert (dest / nested_source.relative_to(metal)).read_text() == "test fixture\n"
+    assert (dest / "build_metal.sh").read_text() == "build input\n"
+    assert root_artifact.read_text() == "test fixture\n", "author evidence must be untouched"
+
+
 def test_models_is_excluded_from_the_context_so_the_allowlist_is_the_only_source(
         tmp_path, monkeypatch):
     _no_network(monkeypatch)

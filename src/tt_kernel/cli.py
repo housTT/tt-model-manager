@@ -27,6 +27,7 @@ from . import (
 )
 from .manifest import (
     DEFAULT_PORT,
+    Capabilities,
     CompatibilityReport,
     Manifest,
     Mesh,
@@ -438,6 +439,16 @@ def package(
     max_model_len: Optional[int] = typer.Option(
         None, "--max-model-len", help="vLLM max context length (bounds KV-cache allocation)."
     ),
+    tool_parser: Optional[str] = typer.Option(
+        None, "--tool-parser", help="Tool-call parser to enable, with automatic tool choice."
+    ),
+    reasoning_parser: Optional[str] = typer.Option(
+        None, "--reasoning-parser", help="Reasoning parser to enable in the packaged server."
+    ),
+    server_arg: Optional[List[str]] = typer.Option(
+        None, "--server-arg", help="One additional vLLM argument (repeatable). Use "
+        "--server-arg=--flag for flags and a separate occurrence for each value."
+    ),
     env: Optional[List[str]] = typer.Option(
         None, "--env", help="KEY=VALUE serving env, overlaid at run time (repeatable)."
     ),
@@ -559,8 +570,9 @@ def package(
         env_map[k] = v
     mesh = Mesh(devices=device_count, topology=mesh_topology) if mesh_topology else None
     resources = Resources(
-        max_num_seqs=max_num_seqs, block_size=block_size, max_model_len=max_model_len
-    ) if (max_num_seqs or block_size or max_model_len) else None
+        max_num_seqs=max_num_seqs, block_size=block_size, max_model_len=max_model_len,
+        extra_args=server_arg or [],
+    ) if (max_num_seqs or block_size or max_model_len or server_arg) else None
     bundle_name = name or (repo_id.split("/")[-1] if repo_id else metal_dir.name)
 
     def _stage(staged: Path) -> Manifest:
@@ -580,6 +592,9 @@ def package(
             mesh=mesh,
             env=env_map,
             resources=resources,
+            capabilities=Capabilities(
+                tool_parser=tool_parser, reasoning_parser=reasoning_parser
+            ) if (tool_parser or reasoning_parser) else None,
             tt_metal_version=metal.resolve_version() or "unknown",
             firmware_min=firmware_min,
             python_version=python_version,
@@ -1221,6 +1236,14 @@ def serve(
             ))
             raise typer.Exit(code=130)
         return
+
+    # Named profiles belong to ContainerSpec only. The v5/v6 launcher is generated
+    # for one mesh; swallowing --profile here could start the wrong hardware target.
+    # Refuse before installing, refreshing, choosing a port, or launching that bundle.
+    if profile is not None:
+        raise _err("--profile requires a container package (schema 5.1). "
+                   "For a v5/v6 bundle, serve the separately packaged hardware target "
+                   "without --profile; this option cannot change its mesh.")
 
     # Past this point --port has ALWAYS been a passthrough: `serve org/m --port 7009`
     # appended it to the launch command and argparse last-wins gave the user priority.

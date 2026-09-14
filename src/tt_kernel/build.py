@@ -193,6 +193,9 @@ METAL_CONTEXT_EXCLUDES = (
     "tech_reports", "tt-train", "model_tracer", ".github", "infra", "jobs",
     "releases", "dockerfile", "contributing", ".claude",
 )
+# Autonomous bringup state can contain multi-GB transcripts. It is not a C++
+# build input. Restrict these names to the root so nested source is not pruned.
+METAL_CONTEXT_ROOT_EXCLUDES = ("bringup", ".agents", ".codex")
 
 
 def _copy_metal_tree(metal: Path, dest: Path) -> None:
@@ -203,7 +206,7 @@ def _copy_metal_tree(metal: Path, dest: Path) -> None:
             if n in METAL_CONTEXT_EXCLUDES or n.startswith(".venv"):
                 drop.add(n)
             elif top and (
-                n in ("build", "venv")
+                n in ("build", "venv", *METAL_CONTEXT_ROOT_EXCLUDES)
                 or (n.startswith("build_") and not n.endswith(".sh"))
             ):
                 drop.add(n)

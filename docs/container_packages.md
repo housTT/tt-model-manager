@@ -262,6 +262,24 @@ shape (latency vs capacity) are both just launch arguments, not separate builds.
 The full annotated template is at
 [`examples/container-example.yaml`](../examples/container-example.yaml).
 
+### Locking custom runtime inputs
+
+`runtime.lock` applies to all `vllm-plugin` engine inputs: a released version,
+a local empty-target wheel, or a local source tree. The generated installer
+installs the lock first, then installs the chosen engine, plugin, optional
+extension and extra wheels with `--no-deps`. A final `uv pip check` rejects
+missing or incompatible runtime dependencies instead of silently changing pins.
+The lock must contain their complete runtime dependency closure; build-isolation
+requirements are separate. Without a lock, the first build resolves as before.
+This check proves dependency consistency, not hardware or model correctness.
+
+The image's subsequent `tt-smi` install also uses the lock as constraints, then
+checks the completed environment with `uv pip check`. A conflict fails the build;
+there is no unconstrained retry. Include `tt-smi` and its dependency closure in
+the lock to pin the tooling itself as well: constraints preserve listed versions,
+but do not pin packages absent from the lock. A lock seeded only from a serving
+venv may omit this image-only tooling and is not yet a complete image lock.
+
 ## From authored YAML to the wire manifest
 
 The authored YAML is deliberately *not* the published document. `ContainerManifest.to_wire()`
@@ -410,6 +428,12 @@ and nothing reports it, because `tt_dit` silently reconverts when `TT_DIT_CACHE_
 rather than failing. `tt-model rm` removes the whole parent; `--keep-cache` keeps it.
 
 ### Inside the image
+
+For a local tt-metal checkout, the producer stages a filtered build context before
+Docker sees it. Root-level `bringup/`, `.agents/` and `.codex/` are excluded along
+with the existing build/cache exclusions: agent run evidence is not compiler
+input. These three exclusions are root-only, so equally named nested source
+directories survive. Filtering does not delete or modify the author's files.
 
 `docker/Dockerfile` is a builder + runtime multi-stage build, kind-agnostic: everything
 stack-specific arrives through two generated scripts (`install_engine.sh`, `verify.sh`) so

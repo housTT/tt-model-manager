@@ -114,7 +114,12 @@ COPY plugin-src /ctx/plugin-src
 COPY vllm-src /ctx/vllm-src
 COPY wheels /ctx/wheels
 RUN bash /ctx/install_engine.sh \
-    && uv pip install --python "$VENV/bin/python" tt-smi
+    && if [ -f /ctx/requirements.lock ]; then \
+         uv pip install --python "$VENV/bin/python" --constraint /ctx/requirements.lock tt-smi; \
+       else \
+         uv pip install --python "$VENV/bin/python" tt-smi; \
+       fi \
+    && uv pip check --python "$VENV/bin/python"
 
 # The fork installs editable at /opt/vllm and must survive into the runtime stage. The
 # mkdir keeps the unconditional COPY below valid for any future kind that has no fork.
