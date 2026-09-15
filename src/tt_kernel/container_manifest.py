@@ -274,6 +274,10 @@ class CardSettings(BaseModel):
     # this, so the author states it.
     description: Optional[str] = None
     quickstart: Optional[str] = None
+    # Measured performance, as Markdown (tables from the author's benchmark sweeps).
+    # Rendered under its own "## Performance" heading after the serve profiles, so a
+    # reader sees the numbers next to the configuration that produced them.
+    performance: Optional[str] = None
 
 
 class ContainerManifest(BaseModel):

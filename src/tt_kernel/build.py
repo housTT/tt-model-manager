@@ -1063,6 +1063,8 @@ def render_model_card(m: ContainerManifest, built: Dict[str, object]) -> str:
                 f"{p.max_num_seqs or ''} | {p.max_model_len or ''} |"
             )
         lines.append("")
+    if m.card and m.card.performance:
+        lines += ["## Performance", "", m.card.performance.rstrip(), ""]
     lines += [
         "## Provenance",
         "",

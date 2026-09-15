@@ -451,6 +451,23 @@ def test_the_card_includes_the_authors_quickstart():
     assert "point it here" in _card(card={"quickstart": "point it here"}).lower()
 
 
+def test_the_card_puts_the_authors_performance_after_the_profiles_and_before_provenance():
+    profiles = [
+        {"name": "p150x2", "hardware": "p150x2", "mesh_device": "P150x2",
+         "max_num_seqs": 8, "max_model_len": 65536},
+        {"name": "p150x4", "hardware": "p150x4", "mesh_device": "P150x4",
+         "max_num_seqs": 32, "max_model_len": 131072},
+    ]
+    card = _card(serve_profiles=profiles, default_profile="p150x4",
+                 card={"performance": "| ISL | TTFT (ms) |\n| --- | --- |\n| 128 | 152.1 |"})
+    assert "## Performance" in card and "| 128 | 152.1 |" in card
+    assert card.index("## Serve profiles") < card.index("## Performance") < card.index("## Provenance")
+
+
+def test_the_card_has_no_performance_section_unless_the_author_wrote_one():
+    assert "## Performance" not in _card()
+
+
 def test_the_card_never_shows_the_internal_kind_slug_as_prose():
     card = _card()
     assert "serving stack" not in card

@@ -114,6 +114,7 @@ Fields, from `src/tt_kernel/container_manifest.py`:
 | `verify` | build-time Python assertions run **inside the finished image**, on top of the launcher's own import checks. |
 | `image` | where the built image is published: `registry: hf` (default) or a real registry namespace. |
 | `card.quickstart` | optional Markdown appended to the generated model card. |
+| `card.performance` | optional Markdown (typically the benchmark sweep tables) rendered under `## Performance`, after the serve profiles and before provenance. |
 
 `max_num_seqs` and `block_size` are **required after profile merge** — the TT backend
 rejects vLLM's own defaults. `mesh_device` must be a value from the plugin's closed
