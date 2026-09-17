@@ -464,6 +464,24 @@ def test_the_card_puts_the_authors_performance_after_the_profiles_and_before_pro
     assert card.index("## Serve profiles") < card.index("## Performance") < card.index("## Provenance")
 
 
+def test_the_card_puts_the_authors_evaluations_between_profiles_and_performance():
+    profiles = [
+        {"name": "p150x2", "hardware": "p150x2", "mesh_device": "P150x2",
+         "max_num_seqs": 8, "max_model_len": 65536},
+        {"name": "p150x4", "hardware": "p150x4", "mesh_device": "P150x4",
+         "max_num_seqs": 32, "max_model_len": 131072},
+    ]
+    card = _card(serve_profiles=profiles, default_profile="p150x4",
+                 card={"evaluations": "| task | score |\n| --- | --- |\n| IFEval | 88.7% |",
+                       "performance": "| ISL | TTFT (ms) |\n| --- | --- |\n| 128 | 152.1 |"})
+    assert "## Evaluations" in card and "| IFEval | 88.7% |" in card
+    assert card.index("## Serve profiles") < card.index("## Evaluations") < card.index("## Performance") < card.index("## Provenance")
+
+
+def test_the_card_has_no_evaluations_section_unless_the_author_wrote_one():
+    assert "## Evaluations" not in _card()
+
+
 def test_the_card_has_no_performance_section_unless_the_author_wrote_one():
     assert "## Performance" not in _card()
 

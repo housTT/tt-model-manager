@@ -278,6 +278,10 @@ class CardSettings(BaseModel):
     # Rendered under its own "## Performance" heading after the serve profiles, so a
     # reader sees the numbers next to the configuration that produced them.
     performance: Optional[str] = None
+    # Accuracy / task evaluations the author ran, as Markdown (scores, subsets, recipes and
+    # caveats). Rendered under "## Evaluations" after the serve profiles and before the
+    # performance section. The tool never invents scores; absent unless written.
+    evaluations: Optional[str] = None
 
 
 class ContainerManifest(BaseModel):

@@ -184,6 +184,12 @@ card:
   quickstart: |
     ### Use with your client
     Point it at `http://127.0.0.1:20000` once the server is up (or the port `tt-model serve` printed).
+  # Accuracy / task evaluations YOU ran, as Markdown, with the subset, recipe and caveats.
+  # Rendered under "## Evaluations" after the serve profiles. Omit and there is no section.
+  evaluations: |
+    | task | subset | score |
+    | --- | --- | --- |
+    | IFEval | 109 prompts | 88.7% |
   # Measured numbers from YOUR sweeps, as Markdown. Rendered under "## Performance" after
   # the serve profiles. The tool never invents performance figures; omit this and the
   # card has no performance section.
