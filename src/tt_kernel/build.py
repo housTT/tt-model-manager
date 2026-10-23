@@ -474,6 +474,9 @@ def stage(manifest_path: Path, out_root: Optional[Path] = None) -> Staged:
         _copy_plugin_tree(src, plugin_ctx)
         plugin_entry["sha"] = _git(src, "rev-parse", "HEAD") or "unknown"
         plugin_entry["dirty"] = bool(_git(src, "status", "--porcelain"))
+        plugin_on_remote = _git(src, "branch", "-r", "--contains", "HEAD")
+        plugin_entry["repo"] = _remote_url_containing_head(src, plugin_on_remote)
+        plugin_entry["pushed"] = bool(plugin_on_remote)
     else:
         plugin_ctx.mkdir(parents=True, exist_ok=True)
 
@@ -1111,6 +1114,7 @@ def render_model_card(m: ContainerManifest, built: Dict[str, object]) -> str:
     if isinstance(plugin_built, dict) and plugin_built.get("sha"):
         cell = _pinned_sha(
             str(plugin_built["sha"]), plugin_built.get("repo"),
+            public=plugin_built.get("pushed") is not False,
             flags="*(dirty tree — the image includes uncommitted changes)*"
             if plugin_built.get("dirty") else "",
         )
